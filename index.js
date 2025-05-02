@@ -1,18 +1,17 @@
 require('dotenv').config();
 const fs = require('fs');
 const { ethers } = require('ethers');
-const blessed = require('neo-blessed');
-const chalk = require('chalk');
 const { HttpsProxyAgent } = require('https-proxy-agent');
+const chalk = require('chalk');
 
 const COLORS = {
-  GREEN: '#00ff00',
-  YELLOW: '#ffff00',
-  RED: '#ff0000',
-  WHITE: '#ffffff',
-  GRAY: '#808080',
-  CYAN: '#00ffff',
-  MAGENTA: '#ff00ff',
+  GREEN: 'green',
+  YELLOW: 'yellow',
+  RED: 'red',
+  WHITE: 'white',
+  GRAY: 'gray',
+  CYAN: 'cyan',
+  MAGENTA: 'magenta'
 };
 
 let proxies = [];
@@ -94,81 +93,145 @@ const STAKE_ABI = [
   'function stake(uint256 amount) external',
 ];
 
-// Create neo-blessed screen
-const screen = blessed.screen({
-  smartCSR: true,
-  title: '[[ R2 AUTO BOT ]] - BY HIMANSHU SAROHA',
-  cursor: { color: COLORS.GREEN },
-});
+// Replace logWindow with console
+function log(message, color = COLORS.WHITE) {
+    console.log(chalk[color](message));
+}
 
-// Main container
-const container = blessed.box({
-  parent: screen,
-  top: 0,
-  left: 0,
-  width: '100%',
-  height: '100%',
-  style: { bg: 'black', fg: COLORS.GREEN },
-});
+// Replace spinner with simple console messages
+function showSpinner(startMessage, endMessage, timeout) {
+    console.log(chalk[COLORS.YELLOW](startMessage));
+    return () => {
+        console.log(chalk[COLORS.GREEN](endMessage));
+    };
+}
 
-// Status bar
-const statusBar = blessed.box({
-  parent: container,
-  top: 0,
-  left: 0,
-  width: '100%',
-  height: 1,
-  content: ' [R2-AUTO-BOT v2.0] - SYSTEM ONLINE ',
-  style: { bg: COLORS.GREEN, fg: 'black', bold: true },
-});
+// Update menu display
+async function showMenu(wallets) {
+    console.clear();
+    console.log(chalk[COLORS.GREEN]('╔════════════════════════════════════════════╗'));
+    console.log(chalk[COLORS.GREEN]('║         R2 AUTO BOT - BY HIMANSHU SAROHA         ║'));
+    console.log(chalk[COLORS.GREEN]('╚════════════════════════════════════════════╝\n'));
 
-// Log window
-const logWindow = blessed.log({
-  parent: container,
-  top: 1,
-  left: 0,
-  width: '70%',
-  height: '90%',
-  border: { type: 'line', fg: COLORS.GREEN },
-  style: { fg: COLORS.GREEN, bg: 'black', scrollbar: { bg: COLORS.GREEN } },
-  scrollable: true,
-  scrollbar: true,
-  tags: true,
-  padding: { left: 1, right: 1 },
-});
+    // Display balances for each wallet
+    console.log(chalk[COLORS.CYAN]('╔════════ Current Balances ════════╗'));
+    for (const walletObj of wallets) {
+        try {
+            const wallet = walletObj.wallet;
+            const network = walletObj.network;
+            
+            // Get ETH balance first
+            const ethBalance = await checkBalance(wallet, 'ETH');
+            
+            // Get token balances
+            const usdcBalance = await checkBalance(wallet, network.contracts.USDC_ADDRESS);
+            const r2usdBalance = await checkBalance(wallet, network.contracts.R2USD_ADDRESS);
+            const sr2usdBalance = await checkBalance(wallet, network.contracts.SR2USD_ADDRESS);
 
-// Info panel
-const infoPanel = blessed.box({
-  parent: container,
-  top: 1,
-  right: 0,
-  width: '30%',
-  height: '90%',
-  border: { type: 'line', fg: COLORS.GREEN },
-  style: { fg: COLORS.GREEN, bg: 'black' },
-  content: '{center}SYSTEM INFO{/center}\n\nInitializing...',
-  tags: true,
-});
+            console.log(chalk[COLORS.WHITE](`║ Wallet: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`));
+            console.log(chalk[COLORS.WHITE](`║ ETH: ${parseFloat(ethBalance).toFixed(6)}`));
+            console.log(chalk[COLORS.WHITE](`║ USDC: ${usdcBalance}`));
+            console.log(chalk[COLORS.WHITE](`║ R2USD: ${r2usdBalance}`));
+            console.log(chalk[COLORS.WHITE](`║ sR2USD: ${sr2usdBalance}`));
+            console.log(chalk[COLORS.CYAN]('║ -------------------------------'));
+        } catch (error) {
+            console.log(chalk[COLORS.RED](`║ Error getting balances: ${error.message}`));
+        }
+    }
+    console.log(chalk[COLORS.CYAN]('╚═════════════════════════════════╝\n'));
 
-// Input box
-const inputBox = blessed.textbox({
-  parent: container,
-  bottom: 0,
-  left: 0,
-  width: '100%',
-  height: 3,
-  border: { type: 'line', fg: COLORS.GREEN },
-  style: { fg: COLORS.GREEN, bg: 'black' },
-  hidden: true,
-  inputOnFocus: true,
-});
+    const menuItems = [
+        `1. Swaps and Staking (Manual)`,
+        `2. Auto Run All`,
+        `3. Random Amount Auto Run (0.1-2 USDC)`,
+        `4. Exit`
+    ];
 
-// Key bindings
-screen.key(['escape', 'q', 'C-c'], () => process.exit(0));
+    menuItems.forEach(item => {
+        console.log(chalk[COLORS.YELLOW](item));
+    });
+    console.log(chalk[COLORS.GREEN]('\n═══════════════════════════════════════'));
+
+    const option = await getInput('Select an option (1-4): ');
+    switch (option) {
+        case '1':
+            await handleSwapsAndStaking(wallets);
+            break;
+        case '2':
+            await handleAutoRunAll(wallets);
+            break;
+        case '3':
+            await handleRandomAmountAutoRun(wallets);
+            break;
+        case '4':
+            console.log(chalk[COLORS.GRAY]('Exiting application...'));
+            process.exit(0);
+        default:
+            console.log(chalk[COLORS.YELLOW]('Invalid option. Please select 1-4.'));
+            await showMenu(wallets);
+            break;
+    }
+}
+
+// Update transaction status display
+function displayTransactionStatus(wallet, network, txType, amount, hash) {
+    console.log('\n' + chalk[COLORS.CYAN]('╔════════ Transaction Details ════════╗'));
+    console.log(chalk[COLORS.WHITE](`║ Wallet: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`));
+    console.log(chalk[COLORS.WHITE](`║ Network: ${network.name}`));
+    console.log(chalk[COLORS.WHITE](`║ Type: ${txType}`));
+    console.log(chalk[COLORS.WHITE](`║ Amount: ${amount}`));
+    console.log(chalk[COLORS.GREEN](`║ Hash: ${hash}`));
+    console.log(chalk[COLORS.CYAN]('╚══════════════════════════════════╝\n'));
+}
+
+// Update balance display
+function displayBalances(usdcBalance, r2usdBalance, sr2usdBalance) {
+    console.log('\n' + chalk[COLORS.CYAN]('╔════════ Current Balances ════════╗'));
+    console.log(chalk[COLORS.WHITE](`║ USDC: ${usdcBalance}`));
+    console.log(chalk[COLORS.WHITE](`║ R2USD: ${r2usdBalance}`));
+    console.log(chalk[COLORS.WHITE](`║ sR2USD: ${sr2usdBalance}`));
+    console.log(chalk[COLORS.CYAN]('╚═════════════════════════════════╝\n'));
+}
+
+// Update progress display
+function displayProgress(current, total, type) {
+    const percentage = (current / total) * 100;
+    const progressBar = '█'.repeat(Math.floor(percentage / 5)) + '░'.repeat(20 - Math.floor(percentage / 5));
+    console.log(chalk[COLORS.CYAN](`\r[${progressBar}] ${percentage.toFixed(1)}% | ${type} ${current}/${total}`));
+}
+
+// Update getInput function
+async function getInput(prompt) {
+    const readline = require('readline').createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    return new Promise(resolve => {
+        readline.question(chalk[COLORS.YELLOW](prompt), answer => {
+            readline.close();
+            resolve(answer);
+        });
+    });
+}
+
+// Update error display
+function displayError(message) {
+    console.log('\n' + chalk[COLORS.RED]('╔════════ ERROR ════════╗'));
+    console.log(chalk[COLORS.RED](`║ ${message}`));
+    console.log(chalk[COLORS.RED]('╚════════════════════════╝\n'));
+}
+
+// Update success display
+function displaySuccess(message) {
+    console.log('\n' + chalk[COLORS.GREEN]('╔════════ SUCCESS ════════╗'));
+    console.log(chalk[COLORS.GREEN](`║ ${message}`));
+    console.log(chalk[COLORS.GREEN]('╚══════════════════════════╝\n'));
+}
 
 // Utility functions
 function colorText(text, color) {
-  return `{${color}-fg}${text}{/}`;
+    return chalk[color](text);
 }
 
 function isValidPrivateKey(key) {
@@ -186,12 +249,12 @@ function loadProxies() {
       proxies = fs.readFileSync('./proxies.txt', 'utf8')
         .split('\n')
         .filter(line => line.trim().length > 0);
-      logWindow.log(`${colorText(`Loaded ${proxies.length} proxies from proxies.txt`, COLORS.GREEN)}`);
+      log(`${colorText(`Loaded ${proxies.length} proxies from proxies.txt`, COLORS.GREEN)}`);
     } else {
-      logWindow.log(`${colorText('proxies.txt not found. Connecting directly.', COLORS.RED)}`);
+      log(`${colorText('proxies.txt not found. Connecting directly.', COLORS.RED)}`);
     }
   } catch (error) {
-    logWindow.log(`${colorText(`Failed to load proxies: ${error.message}`, COLORS.RED)}`);
+    log(`${colorText(`Failed to load proxies: ${error.message}`, COLORS.RED)}`);
   }
 }
 
@@ -204,19 +267,19 @@ function loadPrivateKeys() {
         .filter(key => key && key.trim().length > 0)
         .filter(key => {
           if (!isValidPrivateKey(key)) {
-            logWindow.log(`${colorText(`Invalid private key format for ${key.slice(0, 6)}...: must be 64 hex characters`, COLORS.RED)}`);
+            log(`${colorText(`Invalid private key format for ${key.slice(0, 6)}...: must be 64 hex characters`, COLORS.RED)}`);
             return false;
           }
           return true;
         });
     }
     if (privateKeys.length === 0) {
-      logWindow.log(`${colorText('No valid private keys found in .env (PRIVATE_KEY_*)', COLORS.RED)}`);
+      log(`${colorText('No valid private keys found in .env (PRIVATE_KEY_*)', COLORS.RED)}`);
       process.exit(1);
     }
-    logWindow.log(`${colorText(`Loaded ${privateKeys.length} private key(s) from .env`, COLORS.GREEN)}`);
+    log(`${colorText(`Loaded ${privateKeys.length} private key(s) from .env`, COLORS.GREEN)}`);
   } catch (error) {
-    logWindow.log(`${colorText(`Failed to load private keys from .env: ${error.message}`, COLORS.RED)}`);
+    log(`${colorText(`Failed to load private keys from .env: ${error.message}`, COLORS.RED)}`);
     process.exit(1);
   }
 }
@@ -270,7 +333,7 @@ async function initializeWallet(privateKey, network) {
       try {
         if (proxyString) {
           const proxyConfig = formatProxy(proxyString);
-          logWindow.log(`${colorText(`Using proxy: ${proxyString} with RPC: ${rpcUrl}`, COLORS.GRAY)}`);
+          log(`${colorText(`Using proxy: ${proxyString} with RPC: ${rpcUrl}`, COLORS.GRAY)}`);
           const agent = new HttpsProxyAgent({
             host: proxyConfig.host,
             port: proxyConfig.port,
@@ -284,45 +347,48 @@ async function initializeWallet(privateKey, network) {
             { name: network.name, chainId: network.chainId }
           );
         } else {
-          logWindow.log(`${colorText(`Using RPC: ${rpcUrl}`, COLORS.GRAY)}`);
+          log(`${colorText(`Using RPC: ${rpcUrl}`, COLORS.GRAY)}`);
           provider = new ethers.providers.JsonRpcProvider(
             rpcUrl,
             { name: network.name, chainId: network.chainId }
           );
         }
         await provider.getNetwork();
-        logWindow.log(`${colorText(`Connected to RPC: ${rpcUrl}`, COLORS.GREEN)}`);
+        log(`${colorText(`Connected to RPC: ${rpcUrl}`, COLORS.GREEN)}`);
         stopSpinner();
         const wallet = new ethers.Wallet(privateKey, provider);
-        logWindow.log(`${colorText(`Wallet initialized on ${network.name}: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`, COLORS.WHITE)}`);
+        log(`${colorText(`Wallet initialized on ${network.name}: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`, COLORS.WHITE)}`);
         return { provider, wallet };
       } catch (error) {
         lastError = error;
-        logWindow.log(`${colorText(`Failed to connect to RPC ${rpcUrl}: ${error.message}`, COLORS.YELLOW)}`);
+        log(`${colorText(`Failed to connect to RPC ${rpcUrl}: ${error.message}`, COLORS.YELLOW)}`);
         continue;
       }
     }
     stopSpinner();
     throw new Error(`All RPCs failed for ${network.name}: ${lastError.message}`);
   } catch (error) {
-    logWindow.log(`${colorText(`Failed to initialize wallet for key ${privateKey.slice(0, 6)}... on ${network.name}: ${error.message}`, COLORS.RED)}`);
+    log(`${colorText(`Failed to initialize wallet for key ${privateKey.slice(0, 6)}... on ${network.name}: ${error.message}`, COLORS.RED)}`);
     throw error;
   }
 }
 
 async function checkBalance(wallet, tokenAddress) {
   try {
-    if (!isValidAddress(tokenAddress)) {
-      logWindow.log(`${colorText(`Invalid token address: ${tokenAddress}. Skipping balance check.`, COLORS.RED)}`);
-      return '0';
-    }
+        if (tokenAddress === 'ETH') {
+            // Get native ETH balance
+            const balance = await wallet.getBalance();
+            return ethers.utils.formatEther(balance);
+        } else {
+            // Get token balance
     const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
     const balance = await tokenContract.balanceOf(wallet.address);
     const decimals = await tokenContract.decimals();
-    return ethers.utils.formatUnits(balance, decimals);
+            const formattedBalance = ethers.utils.formatUnits(balance, decimals);
+            return parseFloat(formattedBalance).toFixed(6);
+        }
   } catch (error) {
-    logWindow.log(`${colorText(`Failed to check balance for token ${tokenAddress}: ${error.message}`, COLORS.RED)}`);
-    return '0';
+        return '0.000000';
   }
 }
 
@@ -331,7 +397,7 @@ async function checkEthBalance(wallet) {
     const balance = await wallet.provider.getBalance(wallet.address);
     return ethers.utils.formatEther(balance);
   } catch (error) {
-    logWindow.log(`${colorText(`Failed to check ETH balance: ${error.message}`, COLORS.RED)}`);
+    log(`${colorText(`Failed to check ETH balance: ${error.message}`, COLORS.RED)}`);
     return '0';
   }
 }
@@ -357,13 +423,12 @@ async function updateWalletInfo(wallets, network) {
       `sR2USD: ${sr2usdBalance === 'N/A' ? 'N/A' : parseFloat(sr2usdBalance).toFixed(2)}\n`
     );
   }
-  infoPanel.setContent(
+  log(
     '{center}{bold}SYSTEM INFO{/bold}{/center}\n\n' +
     walletInfo.join('---\n') +
     `{green-fg}STATUS: ONLINE{/green-fg}\n` +
     `{green-fg}NETWORK: ${network.name} (chainId: ${network.chainId}){/green-fg}`
   );
-  screen.render();
 }
 
 async function estimateGas(wallet, tx) {
@@ -371,7 +436,7 @@ async function estimateGas(wallet, tx) {
     const estimatedGas = await wallet.estimateGas(tx);
     return estimatedGas.mul(120).div(100);
   } catch (error) {
-    logWindow.log(`${colorText(`Failed to estimate gas: ${error.message}`, COLORS.RED)}`);
+    log(`${colorText(`Failed to estimate gas: ${error.message}`, COLORS.RED)}`);
     return ethers.BigNumber.from('200000');
   }
 }
@@ -379,7 +444,7 @@ async function estimateGas(wallet, tx) {
 async function approveToken(wallet, tokenAddress, spenderAddress, amount, network) {
   try {
     if (!isValidAddress(tokenAddress) || !isValidAddress(spenderAddress)) {
-      logWindow.log(`${colorText(`Invalid token (${tokenAddress}) or spender (${spenderAddress}) address. Skipping approval.`, COLORS.RED)}`);
+      log(`${colorText(`Invalid token (${tokenAddress}) or spender (${spenderAddress}) address. Skipping approval.`, COLORS.RED)}`);
       return false;
     }
     const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
@@ -387,13 +452,13 @@ async function approveToken(wallet, tokenAddress, spenderAddress, amount, networ
     const currentAllowance = await tokenContract.allowance(wallet.address, spenderAddress);
     const amountInWei = ethers.utils.parseUnits(amount.toString(), decimals);
     if (currentAllowance.gte(amountInWei)) {
-      logWindow.log(`${colorText('Sufficient allowance already exists', COLORS.GRAY)}`);
+      log(`${colorText('Sufficient allowance already exists', COLORS.GRAY)}`);
       return true;
     }
-    logWindow.log(`${colorText(`Approving ${amount} tokens for spending...`, COLORS.MAGENTA)}`);
+    log(`${colorText(`Approving ${amount} tokens for spending...`, COLORS.MAGENTA)}`);
     const tx = await tokenContract.approve(spenderAddress, amountInWei, { gasLimit: 100000 });
-    logWindow.log(`${colorText(`Approval transaction sent: ${tx.hash}`, COLORS.GREEN)}`);
-    logWindow.log(`${colorText(`Explorer: ${network.explorer}/tx/${tx.hash}`, COLORS.GRAY)}`);
+    log(`${colorText(`Approval transaction sent: ${tx.hash}`, COLORS.GREEN)}`);
+    log(`${colorText(`Explorer: ${network.explorer}/tx/${tx.hash}`, COLORS.GRAY)}`);
     const stopSpinner = showSpinner(
       'Waiting for approval confirmation...',
       `Approval confirmed!`,
@@ -401,11 +466,11 @@ async function approveToken(wallet, tokenAddress, spenderAddress, amount, networ
     );
     await tx.wait();
     stopSpinner();
-    logWindow.log(`${colorText('Approval completed', COLORS.CYAN)}`);
+    log(`${colorText('Approval completed', COLORS.CYAN)}`);
     await updateWalletInfo([wallet], network);
     return true;
   } catch (error) {
-    logWindow.log(`${colorText(`Failed to approve token: ${error.message}`, COLORS.RED)}`);
+    log(`${colorText(`Failed to approve token: ${error.message}`, COLORS.RED)}`);
     return false;
   }
 }
@@ -418,7 +483,7 @@ async function estimateGasFees(provider) {
       maxPriorityFeePerGas: feeData.maxPriorityFeePerGas || ethers.utils.parseUnits('2', 'gwei'),
     };
   } catch (error) {
-    logWindow.log(`${colorText(`Failed to estimate gas fees, using defaults: ${error.message}`, COLORS.YELLOW)}`);
+    log(`${colorText(`Failed to estimate gas fees, using defaults: ${error.message}`, COLORS.YELLOW)}`);
     return {
       maxFeePerGas: ethers.utils.parseUnits('50', 'gwei'),
       maxPriorityFeePerGas: ethers.utils.parseUnits('2', 'gwei'),
@@ -429,18 +494,18 @@ async function estimateGasFees(provider) {
 // Add consistent delay between transactions
 async function delay(min = 5, max = 10) {
     const seconds = Math.floor(Math.random() * (max - min + 1)) + min;
-    logWindow.log(`${colorText(`Waiting ${seconds} seconds before next transaction...`, COLORS.GRAY)}`);
+    log(`${colorText(`Waiting ${seconds} seconds before next transaction...`, COLORS.GRAY)}`);
     await new Promise(resolve => setTimeout(resolve, seconds * 1000));
 }
 
 // Update handleRandomAmountAutoRun function
 async function handleRandomAmountAutoRun(wallets) {
     try {
-        logWindow.log(`${colorText('=== Random Amount Auto Run Configuration ===', COLORS.CYAN)}`);
+        log(`${colorText('=== Random Amount Auto Run Configuration ===', COLORS.CYAN)}`);
         const numTxs = await getInput('Enter number of transactions: ');
         const parsedNumTxs = parseInt(numTxs);
         if (isNaN(parsedNumTxs) || parsedNumTxs <= 0) {
-            logWindow.log(`${colorText('Invalid number. Enter a positive integer.', COLORS.RED)}`);
+            log(`${colorText('Invalid number. Enter a positive integer.', COLORS.RED)}`);
             await showMenu(wallets);
             return;
         }
@@ -464,21 +529,21 @@ async function handleRandomAmountAutoRun(wallets) {
 
                             switch (action) {
                                 case 1:
-                                    logWindow.log(`${colorText(`Transaction ${i}/${parsedNumTxs}: Random USDC to R2USD swap`, COLORS.YELLOW)}`);
+                                    log(`${colorText(`Transaction ${i}/${parsedNumTxs}: Random USDC to R2USD swap`, COLORS.YELLOW)}`);
                                     success = await swapUSDCtoR2USD(wallet, null, network);
                                     break;
                                 case 2:
-                                    logWindow.log(`${colorText(`Transaction ${i}/${parsedNumTxs}: Random R2USD to USDC swap`, COLORS.YELLOW)}`);
+                                    log(`${colorText(`Transaction ${i}/${parsedNumTxs}: Random R2USD to USDC swap`, COLORS.YELLOW)}`);
                                     success = await swapR2USDtoUSDC(wallet, null, network);
                                     break;
                                 case 3:
-                                    logWindow.log(`${colorText(`Transaction ${i}/${parsedNumTxs}: Random R2USD staking`, COLORS.YELLOW)}`);
+                                    log(`${colorText(`Transaction ${i}/${parsedNumTxs}: Random R2USD staking`, COLORS.YELLOW)}`);
                                     success = await stakeR2USD(wallet, null, network);
                                     break;
                             }
 
                             if (!success) {
-                                logWindow.log(`${colorText(`Transaction ${i} failed, waiting before next attempt...`, COLORS.YELLOW)}`);
+                                log(`${colorText(`Transaction ${i} failed, waiting before next attempt...`, COLORS.YELLOW)}`);
                             }
 
                             // Add consistent delay between transactions
@@ -487,7 +552,7 @@ async function handleRandomAmountAutoRun(wallets) {
                             }
 
                         } catch (error) {
-                            logWindow.log(`${colorText(`Error in transaction ${i}: ${error.message}`, COLORS.RED)}`);
+                            log(`${colorText(`Error in transaction ${i}: ${error.message}`, COLORS.RED)}`);
                             // Add delay even after error
                             if (i < parsedNumTxs) {
                                 await delay(5, 10);
@@ -496,19 +561,19 @@ async function handleRandomAmountAutoRun(wallets) {
                         }
                     }
 
-                    logWindow.log(`${colorText(`Completed transactions for wallet: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`, COLORS.GREEN)}`);
+                    log(`${colorText(`Completed transactions for wallet: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`, COLORS.GREEN)}`);
                 }
             }
 
-            logWindow.log(`${colorText(`All transactions completed! Pausing for 24 hours...`, COLORS.YELLOW)}`);
+            log(`${colorText(`All transactions completed! Pausing for 24 hours...`, COLORS.YELLOW)}`);
             await new Promise(resolve => setTimeout(resolve, 24 * 60 * 60 * 1000));
-            logWindow.log(`${colorText(`Restarting cycle...`, COLORS.CYAN)}`);
+            log(`${colorText(`Restarting cycle...`, COLORS.CYAN)}`);
             await runRandomCycle();
         };
 
         await runRandomCycle();
     } catch (error) {
-        logWindow.log(`${colorText(`Error in auto-run cycle: ${error.message}`, COLORS.RED)}`);
+        log(`${colorText(`Error in auto-run cycle: ${error.message}`, COLORS.RED)}`);
         await showMenu(wallets);
     }
 }
@@ -520,7 +585,7 @@ async function retryTransaction(func, maxRetries = 3) {
             return await func();
         } catch (error) {
             if (i === maxRetries - 1) throw error;
-            logWindow.log(`${colorText(`Retry ${i + 1}/${maxRetries}: ${error.message}`, COLORS.YELLOW)}`);
+            log(`${colorText(`Retry ${i + 1}/${maxRetries}: ${error.message}`, COLORS.YELLOW)}`);
             await delay(5, 10); // Add delay between retries
         }
     }
@@ -529,17 +594,25 @@ async function retryTransaction(func, maxRetries = 3) {
 // Update error handling in swap functions
 async function swapUSDCtoR2USD(wallet, amount, network) {
     try {
-        const randomAmountBN = await getRandomAmount(wallet, network.contracts.USDC_ADDRESS, network, "USDC to R2USD swap");
+        const amountInWei = ethers.utils.parseUnits(amount.toString(), 6);
         
+        // Check balance
+        const tokenContract = new ethers.Contract(network.contracts.USDC_ADDRESS, ERC20_ABI, wallet);
+        const balance = await tokenContract.balanceOf(wallet.address);
+        
+        if (amountInWei.gt(balance)) {
+            console.log(chalk[COLORS.RED](`Insufficient USDC balance for swap`));
+            return false;
+        }
+
         // Approve with retry
         const approved = await retryTransaction(async () => {
-            return await approveToken(wallet, network.contracts.USDC_ADDRESS, network.contracts.USDC_TO_R2USD_CONTRACT, ethers.utils.formatUnits(randomAmountBN, 6), network);
+            return await approveToken(wallet, network.contracts.USDC_ADDRESS, network.contracts.USDC_TO_R2USD_CONTRACT, ethers.utils.formatUnits(amountInWei, 6), network);
         });
         
         if (!approved) return false;
 
         // Prepare transaction
-        const amountFormatted = ethers.utils.formatUnits(randomAmountBN, 6);
         let data;
         
         if (network.name === 'Sepolia' || network.name === 'Plume Testnet') {
@@ -547,13 +620,13 @@ async function swapUSDCtoR2USD(wallet, amount, network) {
                 network.contracts.USDC_TO_R2USD_METHOD_ID,
                 ethers.utils.defaultAbiCoder.encode(
                     ['address', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
-                    [wallet.address, randomAmountBN, 0, 0, 0, 0, 0]
+                    [wallet.address, amountInWei, 0, 0, 0, 0, 0]
                 ),
             ]);
         } else {
-            const minOutput = randomAmountBN.mul(97).div(100);
+            const minOutput = amountInWei.mul(97).div(100);
             const swapContract = new ethers.Contract(network.contracts.USDC_TO_R2USD_CONTRACT, SWAP_ABI, wallet);
-            data = swapContract.interface.encodeFunctionData('exchange', [0, 1, randomAmountBN, minOutput]);
+            data = swapContract.interface.encodeFunctionData('exchange', [0, 1, amountInWei, minOutput]);
         }
 
         // Execute transaction with retry
@@ -566,37 +639,37 @@ async function swapUSDCtoR2USD(wallet, amount, network) {
         };
 
         const gasLimit = await estimateGas(wallet, tx);
-            logWindow.log(`${colorText(`Swapping ${amountFormatted} USDC to R2USD`, COLORS.YELLOW)}`);
+            log(`${colorText(`Swapping ${amount} USDC to R2USD`, COLORS.YELLOW)}`);
             
         const stopSpinner = showSpinner(
-                `Swapping ${amountFormatted} USDC to R2USD...`,
+                `Swapping ${amount} USDC to R2USD...`,
                 `Swap completed`,
                 60
             );
 
             try {
                 const signedTx = await wallet.sendTransaction({ ...tx, gasLimit });
-                logWindow.log(`${colorText(`Transaction: ${signedTx.hash}`, COLORS.GREEN)}`);
+                log(`${colorText(`Transaction: ${signedTx.hash}`, COLORS.GREEN)}`);
         await signedTx.wait();
         stopSpinner();
 
                 // Verify the swap
         const newUSDCBalance = await checkBalance(wallet, network.contracts.USDC_ADDRESS);
         const newR2USDBalance = await checkBalance(wallet, network.contracts.R2USD_ADDRESS);
-                logWindow.log(`${colorText(`New USDC: ${newUSDCBalance}, New R2USD: ${newR2USDBalance}`, COLORS.WHITE)}`);
+                log(`${colorText(`New USDC: ${newUSDCBalance}, New R2USD: ${newR2USDBalance}`, COLORS.WHITE)}`);
                 
         await updateWalletInfo([wallet], network);
         return true;
     } catch (error) {
         stopSpinner();
                 if (error.message.includes('timeout')) {
-                    logWindow.log(colorText(`Transaction may be pending. Check explorer: ${network.explorer}/tx/${signedTx.hash}`, COLORS.YELLOW));
+                    log(colorText(`Transaction may be pending. Check explorer: ${network.explorer}/tx/${signedTx.hash}`, COLORS.YELLOW));
                 }
         throw error;
     }
         });
         } catch (error) {
-        logWindow.log(colorText(`USDC to R2USD swap failed: ${error.message}`, COLORS.RED));
+        log(colorText(`USDC to R2USD swap failed: ${error.message}`, COLORS.RED));
                 return false;
     }
 }
@@ -604,43 +677,6 @@ async function swapUSDCtoR2USD(wallet, amount, network) {
 // Similar updates for R2USD to USDC swap and stakeR2USD functions...
 
 // UI helper functions
-function showSpinner(message, completionMessage = 'Done!', duration = 60) {
-  const spinnerStyles = [
-    ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
-    ['-', '=', '≡'],
-    ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'],
-  ];
-  const spinner = spinnerStyles[Math.floor(Math.random() * spinnerStyles.length)];
-  let i = 0;
-  logWindow.log(`${colorText(`${message} ${spinner[0]}`, COLORS.YELLOW)}`);
-  const logIndex = logWindow.getLines().length - 1;
-  const interval = setInterval(() => {
-    logWindow.setLine(logIndex, `${colorText(`${message} ${spinner[i++ % spinner.length]}`, COLORS.YELLOW)}`);
-    screen.render();
-  }, duration);
-  return () => {
-    clearInterval(interval);
-    logWindow.setLine(logIndex, `${colorText(completionMessage, COLORS.GREEN)}`);
-    screen.render();
-  };
-}
-
-function getInput(promptText) {
-  return new Promise((resolve) => {
-    logWindow.log(`${colorText(promptText, COLORS.YELLOW)}`);
-    inputBox.setValue('');
-    inputBox.show();
-    screen.render();
-    inputBox.once('submit', (value) => {
-      inputBox.hide();
-      screen.render();
-      resolve(value);
-    });
-    inputBox.focus();
-    inputBox.readInput();
-  });
-}
-
 function showBanner() {
   const banner = [
     '>>> SYSTEM BOOT INITIATED',
@@ -649,56 +685,19 @@ function showBanner() {
   ];
   banner.forEach((line, index) => {
     setTimeout(() => {
-      logWindow.log(`${colorText(line, index === 1 ? COLORS.CYAN : COLORS.GREEN)}`);
-      screen.render();
+      log(line, index === 1 ? COLORS.CYAN : COLORS.GREEN);
     }, index * 150);
   });
 }
 
-async function showMenu(wallets) {
-  const menuItems = [
-    `1. Swaps and Staking (Manual)`,
-    `2. Auto Run All`,
-    `3. Random Amount Auto Run (0.1-2 USDC)`,
-    `4. Exit`,
-  ];
-  logWindow.log(`${colorText('========== R2 AUTO BOT MENU ==========', COLORS.WHITE)}`);
-  for (const item of menuItems) {
-    logWindow.log(`${colorText(item, COLORS.YELLOW)}`);
-    await new Promise(resolve => setTimeout(resolve, 100));
-    screen.render();
-  }
-  logWindow.log(`${colorText('=====================================', COLORS.WHITE)}`);
-
-  const option = await getInput('Select an option (1-4): ');
-  switch (option) {
-    case '1':
-      await handleSwapsAndStaking(wallets);
-      break;
-    case '2':
-      await handleAutoRunAll(wallets);
-      break;
-    case '3':
-      await handleRandomAmountAutoRun(wallets);
-      break;
-    case '4':
-      logWindow.log(`${colorText(`Exiting application...`, COLORS.GRAY)}`);
-      process.exit(0);
-    default:
-      logWindow.log(`${colorText('Invalid option. Please select 1-4.', COLORS.YELLOW)}`);
-      await showMenu(wallets);
-      break;
-  }
-}
-
 async function selectWallet(wallets) {
   if (wallets.length === 1) {
-    logWindow.log(`${colorText(`Using wallet: ${wallets[0].wallet.address.slice(0, 6)}...${wallets[0].wallet.address.slice(-4)}`, COLORS.WHITE)}`);
+    log(`${colorText(`Using wallet: ${wallets[0].wallet.address.slice(0, 6)}...${wallets[0].wallet.address.slice(-4)}`, COLORS.WHITE)}`);
     return wallets[0];
   }
-  logWindow.log(`${colorText('Available wallets:', COLORS.WHITE)}`);
+  log(`${colorText('Available wallets:', COLORS.WHITE)}`);
   wallets.forEach((walletObj, index) => {
-    logWindow.log(`${colorText(`${index + 1}. ${walletObj.wallet.address.slice(0, 6)}...${walletObj.wallet.address.slice(-4)}`, COLORS.YELLOW)}`);
+    log(`${colorText(`${index + 1}. ${walletObj.wallet.address.slice(0, 6)}...${walletObj.wallet.address.slice(-4)}`, COLORS.YELLOW)}`);
   });
   const input = await getInput('Select wallet number (or "all" for all wallets): ');
   if (input.toLowerCase() === 'all') {
@@ -706,22 +705,22 @@ async function selectWallet(wallets) {
   }
   const index = parseInt(input) - 1;
   if (isNaN(index) || index < 0 || index >= wallets.length) {
-    logWindow.log(`${colorText('Invalid selection. Using first wallet.', COLORS.YELLOW)}`);
+    log(`${colorText('Invalid selection. Using first wallet.', COLORS.YELLOW)}`);
     return wallets[0];
   }
-  logWindow.log(`${colorText(`Using wallet: ${wallets[index].wallet.address.slice(0, 6)}...${wallets[index].wallet.address.slice(-4)}`, COLORS.WHITE)}`);
+  log(`${colorText(`Using wallet: ${wallets[index].wallet.address.slice(0, 6)}...${wallets[index].wallet.address.slice(-4)}`, COLORS.WHITE)}`);
   return wallets[index];
 }
 
 async function selectNetwork() {
   const networkList = Object.values(NETWORKS);
   if (networkList.length === 1) {
-    logWindow.log(`${colorText(`Using network: ${networkList[0].name}`, COLORS.WHITE)}`);
+    log(`${colorText(`Using network: ${networkList[0].name}`, COLORS.WHITE)}`);
     return [networkList[0]];
   }
-  logWindow.log(`${colorText('Available networks:', COLORS.WHITE)}`);
+  log(`${colorText('Available networks:', COLORS.WHITE)}`);
   networkList.forEach((network, index) => {
-    logWindow.log(`${colorText(`${index + 1}. ${network.name}`, COLORS.YELLOW)}`);
+    log(`${colorText(`${index + 1}. ${network.name}`, COLORS.YELLOW)}`);
   });
   const input = await getInput('Select network number (or "all" for all networks): ');
   if (input.toLowerCase() === 'all') {
@@ -729,118 +728,135 @@ async function selectNetwork() {
   }
   const index = parseInt(input) - 1;
   if (isNaN(index) || index < 0 || index >= networkList.length) {
-    logWindow.log(`${colorText('Invalid selection. Using first network.', COLORS.YELLOW)}`);
+    log(`${colorText('Invalid selection. Using first network.', COLORS.YELLOW)}`);
     return [networkList[0]];
   }
-  logWindow.log(`${colorText(`Using network: ${networkList[index].name}`, COLORS.WHITE)}`);
+  log(`${colorText(`Using network: ${networkList[index].name}`, COLORS.WHITE)}`);
   return [networkList[index]];
 }
 
 async function handleSwapsAndStaking(wallets) {
   try {
+        console.clear();
+        console.log(chalk[COLORS.GREEN]('╔════════ Manual Swaps and Staking ════════╗'));
+        
+        // Select wallet if multiple
     const selectedWallets = wallets.length === 1 ? wallets[0] : await selectWallet(wallets);
     const isAllWallets = Array.isArray(selectedWallets);
     const walletList = isAllWallets ? selectedWallets : [selectedWallets];
 
+        // Select network
     const selectedNetworks = await selectNetwork();
     const isAllNetworks = selectedNetworks.length > 1;
 
-    logWindow.log(`${colorText('=== Swap/Staking Configuration ===', COLORS.CYAN)}`);
-    const numTxs = await getInput('Enter number of transactions (or "back" to return): ');
-    if (numTxs.toLowerCase() === 'back') {
+        console.log(chalk[COLORS.CYAN]('\nSelect Action:'));
+        console.log(chalk[COLORS.YELLOW]('1. USDC to R2USD Swap'));
+        console.log(chalk[COLORS.YELLOW]('2. R2USD to USDC Swap'));
+        console.log(chalk[COLORS.YELLOW]('3. Stake R2USD'));
+        console.log(chalk[COLORS.YELLOW]('4. Back to Main Menu'));
+
+        const action = await getInput('\nSelect action (1-4): ');
+        if (action === '4') {
       await showMenu(wallets);
       return;
     }
+
+        // Get amount from user
+        const amount = await getInput('Enter amount: ');
+        if (isNaN(amount) || parseFloat(amount) <= 0) {
+            console.log(chalk[COLORS.RED]('Invalid amount. Please enter a positive number.'));
+            await handleSwapsAndStaking(wallets);
+            return;
+        }
+
+        // Get number of transactions
+        const numTxs = await getInput('Enter number of transactions: ');
     const parsedNumTxs = parseInt(numTxs);
     if (isNaN(parsedNumTxs) || parsedNumTxs <= 0) {
-      logWindow.log(`${colorText('Invalid number. Enter a positive integer.', COLORS.RED)}`);
+            console.log(chalk[COLORS.RED]('Invalid number. Enter a positive integer.'));
       await handleSwapsAndStaking(wallets);
       return;
     }
-    logWindow.log(`${colorText('=================================', COLORS.CYAN)}`);
 
-    const runSwapCycle = async () => {
       for (const network of selectedNetworks) {
-        logWindow.log(`${colorText(`Processing network: ${network.name}`, COLORS.CYAN)}`);
-        if (network.name !== 'Sepolia') {
-          logWindow.log(`${colorText(`Warning: Staking addresses may be Sepolia-specific. Verify STAKE_R2USD_CONTRACT (${network.contracts.STAKE_R2USD_CONTRACT}) on ${network.explorer}.`, COLORS.YELLOW)}`);
-        }
+            console.log(chalk[COLORS.CYAN](`\nProcessing network: ${network.name}`));
+            
         for (const walletObj of walletList) {
           let wallet = walletObj.wallet;
           if (walletObj.network.name !== network.name) {
             const result = await initializeWallet(walletObj.privateKey, network);
             wallet = result.wallet;
           }
-          logWindow.log(`${colorText(`Processing wallet: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} on ${network.name}`, COLORS.WHITE)}`);
 
-          logWindow.log(`${colorText(`Starting ${parsedNumTxs} USDC to R2USD swaps`, COLORS.CYAN)}`);
+                console.log(chalk[COLORS.WHITE](`Processing wallet: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`));
+
           for (let i = 1; i <= parsedNumTxs; i++) {
-            logWindow.log(`${colorText(`Swap ${i}/${parsedNumTxs}: USDC to R2USD`, COLORS.YELLOW)}`);
-            const success = await swapUSDCtoR2USD(wallet, null, network);
-            logWindow.log(
-              `${colorText(`Swap ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
-            );
-            if (!success) break;
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
+                    try {
+                        let success = false;
+                        switch (action) {
+                            case '1':
+                                console.log(chalk[COLORS.YELLOW](`\nTransaction ${i}/${parsedNumTxs}: USDC to R2USD swap`));
+                                success = await swapUSDCtoR2USD(wallet, amount, network);
+                                break;
+                            case '2':
+                                console.log(chalk[COLORS.YELLOW](`\nTransaction ${i}/${parsedNumTxs}: R2USD to USDC swap`));
+                                success = await swapR2USDtoUSDC(wallet, amount, network);
+                                break;
+                            case '3':
+                                console.log(chalk[COLORS.YELLOW](`\nTransaction ${i}/${parsedNumTxs}: Stake R2USD`));
+                                success = await stakeR2USD(wallet, amount, network);
+                                break;
+                        }
 
-          logWindow.log(`${colorText(`Starting ${parsedNumTxs} R2USD to USDC swaps`, COLORS.CYAN)}`);
-          for (let i = 1; i <= parsedNumTxs; i++) {
-            logWindow.log(`${colorText(`Swap ${i}/${parsedNumTxs}: R2USD to USDC`, COLORS.YELLOW)}`);
-            const success = await swapR2USDtoUSDC(wallet, null, network);
-            logWindow.log(
-              `${colorText(`Swap ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
-            );
-            if (!success) break;
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
+                        if (success) {
+                            console.log(chalk[COLORS.GREEN](`Transaction ${i} completed successfully!`));
+                        } else {
+                            console.log(chalk[COLORS.RED](`Transaction ${i} failed.`));
+                        }
 
-          logWindow.log(`${colorText(`Starting ${parsedNumTxs} R2USD to sR2USD stakes`, COLORS.CYAN)}`);
-          for (let i = 1; i <= parsedNumTxs; i++) {
-            logWindow.log(`${colorText(`Stake ${i}/${parsedNumTxs}: R2USD to sR2USD`, COLORS.YELLOW)}`);
-            const success = await stakeR2USD(wallet, null, network);
-            logWindow.log(
-              `${colorText(`Stake ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
-            );
-            if (!success) break;
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
+                        // Add delay between transactions
+                        if (i < parsedNumTxs) {
+                            const delay = 5000; // 5 seconds
+                            console.log(chalk[COLORS.GRAY](`Waiting ${delay/1000} seconds before next transaction...`));
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                        }
 
-          logWindow.log(`${colorText(`Completed all tasks for ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} on ${network.name}`, COLORS.GREEN)}`);
+                    } catch (error) {
+                        console.log(chalk[COLORS.RED](`Error in transaction ${i}: ${error.message}`));
+                        continue;
+                    }
+                }
+            }
         }
-      }
 
-      logWindow.log(`${colorText(`All swaps/stakes completed! Pausing for 24 hours...`, COLORS.YELLOW)}`);
-      await new Promise(resolve => setTimeout(resolve, 24 * 60 * 60 * 1000));
-      logWindow.log(`${colorText(`Restarting swap cycle...`, COLORS.CYAN)}`);
-      await handleSwapsAndStaking(wallets);
-    };
+        console.log(chalk[COLORS.GREEN]('\nAll transactions completed!'));
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        await showMenu(wallets);
 
-    await runSwapCycle();
   } catch (error) {
-    logWindow.log(`${colorText(`Error in swap/staking cycle: ${error.message}`, COLORS.RED)}`);
+        console.log(chalk[COLORS.RED](`Error: ${error.message}`));
     await showMenu(wallets);
   }
 }
 
 async function handleAutoRunAll(wallets) {
   try {
-    logWindow.log(`${colorText('=== Auto Run All Configuration ===', COLORS.CYAN)}`);
+    log(`${colorText('=== Auto Run All Configuration ===', COLORS.CYAN)}`);
     const numTxs = await getInput('Enter number of transactions: ');
     const parsedNumTxs = parseInt(numTxs);
     if (isNaN(parsedNumTxs) || parsedNumTxs <= 0) {
-      logWindow.log(`${colorText('Invalid number. Enter a positive integer.', COLORS.RED)}`);
+      log(`${colorText('Invalid number. Enter a positive integer.', COLORS.RED)}`);
       await showMenu(wallets);
       return;
     }
-    logWindow.log(`${colorText('=================================', COLORS.CYAN)}`);
+    log(`${colorText('=================================', COLORS.CYAN)}`);
 
     const runAutoCycle = async () => {
       const networkList = Object.values(NETWORKS);
       for (const network of networkList) {
-        logWindow.log(`${colorText(`Processing network: ${network.name}`, COLORS.CYAN)}`);
+        log(`${colorText(`Processing network: ${network.name}`, COLORS.CYAN)}`);
         if (network.name !== 'Sepolia') {
-          logWindow.log(`${colorText(`Warning: Staking addresses may be Sepolia-specific. Verify STAKE_R2USD_CONTRACT (${network.contracts.STAKE_R2USD_CONTRACT}) on ${network.explorer}.`, COLORS.YELLOW)}`);
+          log(`${colorText(`Warning: Staking addresses may be Sepolia-specific. Verify STAKE_R2USD_CONTRACT (${network.contracts.STAKE_R2USD_CONTRACT}) on ${network.explorer}.`, COLORS.YELLOW)}`);
         }
         for (const walletObj of wallets) {
           let wallet;
@@ -848,57 +864,57 @@ async function handleAutoRunAll(wallets) {
             const result = await initializeWallet(walletObj.privateKey, network);
             wallet = result.wallet;
           } catch (error) {
-            logWindow.log(`${colorText(`Skipping wallet ${walletObj.wallet.address.slice(0, 6)}... on ${network.name} due to initialization error`, COLORS.RED)}`);
+            log(`${colorText(`Skipping wallet ${walletObj.wallet.address.slice(0, 6)}... on ${network.name} due to initialization error`, COLORS.RED)}`);
             continue;
           }
-          logWindow.log(`${colorText(`Processing wallet: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} on ${network.name}`, COLORS.WHITE)}`);
+          log(`${colorText(`Processing wallet: ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} on ${network.name}`, COLORS.WHITE)}`);
 
-          logWindow.log(`${colorText(`Starting ${parsedNumTxs} USDC to R2USD swaps`, COLORS.CYAN)}`);
+          log(`${colorText(`Starting ${parsedNumTxs} USDC to R2USD swaps`, COLORS.CYAN)}`);
           for (let i = 1; i <= parsedNumTxs; i++) {
-            logWindow.log(`${colorText(`Swap ${i}/${parsedNumTxs}: USDC to R2USD`, COLORS.YELLOW)}`);
+            log(`${colorText(`Swap ${i}/${parsedNumTxs}: USDC to R2USD`, COLORS.YELLOW)}`);
             const success = await swapUSDCtoR2USD(wallet, null, network);
-            logWindow.log(
+            log(
               `${colorText(`Swap ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
             );
             if (!success) break;
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
 
-          logWindow.log(`${colorText(`Starting ${parsedNumTxs} R2USD to USDC swaps`, COLORS.CYAN)}`);
+          log(`${colorText(`Starting ${parsedNumTxs} R2USD to USDC swaps`, COLORS.CYAN)}`);
           for (let i = 1; i <= parsedNumTxs; i++) {
-            logWindow.log(`${colorText(`Swap ${i}/${parsedNumTxs}: R2USD to USDC`, COLORS.YELLOW)}`);
+            log(`${colorText(`Swap ${i}/${parsedNumTxs}: R2USD to USDC`, COLORS.YELLOW)}`);
             const success = await swapR2USDtoUSDC(wallet, null, network);
-            logWindow.log(
+            log(
               `${colorText(`Swap ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
             );
             if (!success) break;
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
 
-          logWindow.log(`${colorText(`Starting ${parsedNumTxs} R2USD to sR2USD stakes`, COLORS.CYAN)}`);
+          log(`${colorText(`Starting ${parsedNumTxs} R2USD to sR2USD stakes`, COLORS.CYAN)}`);
           for (let i = 1; i <= parsedNumTxs; i++) {
-            logWindow.log(`${colorText(`Stake ${i}/${parsedNumTxs}: R2USD to sR2USD`, COLORS.YELLOW)}`);
+            log(`${colorText(`Stake ${i}/${parsedNumTxs}: R2USD to sR2USD`, COLORS.YELLOW)}`);
             const success = await stakeR2USD(wallet, null, network);
-            logWindow.log(
+            log(
               `${colorText(`Stake ${i} ${success ? 'completed!' : 'failed.'}`, success ? COLORS.GREEN : COLORS.RED)}`
             );
             if (!success) break;
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
 
-          logWindow.log(`${colorText(`Completed all tasks for ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} on ${network.name}`, COLORS.GREEN)}`);
+          log(`${colorText(`Completed all tasks for ${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)} on ${network.name}`, COLORS.GREEN)}`);
         }
       }
 
-      logWindow.log(`${colorText(`All networks processed! Pausing for 24 hours...`, COLORS.YELLOW)}`);
+      log(`${colorText(`All networks processed! Pausing for 24 hours...`, COLORS.YELLOW)}`);
       await new Promise(resolve => setTimeout(resolve, 24 * 60 * 60 * 1000));
-      logWindow.log(`${colorText(`Restarting auto-run cycle...`, COLORS.CYAN)}`);
+      log(`${colorText(`Restarting auto-run cycle...`, COLORS.CYAN)}`);
       await runAutoCycle();
     };
 
     await runAutoCycle();
   } catch (error) {
-    logWindow.log(`${colorText(`Error in auto-run cycle: ${error.message}`, COLORS.RED)}`);
+    log(`${colorText(`Error in auto-run cycle: ${error.message}`, COLORS.RED)}`);
     await showMenu(wallets);
   }
 }
@@ -923,13 +939,13 @@ async function main() {
       }
     }
     if (wallets.length === 0) {
-      logWindow.log(`${colorText(`No valid wallets initialized. Exiting.`, COLORS.RED)}`);
+      log(`${colorText(`No valid wallets initialized. Exiting.`, COLORS.RED)}`);
       process.exit(1);
     }
     await updateWalletInfo(wallets.map(w => w.wallet), firstNetwork);
     await showMenu(wallets);
   } catch (error) {
-    logWindow.log(`${colorText(`Fatal error: ${error.message}`, COLORS.RED)}`);
+    log(`${colorText(`Fatal error: ${error.message}`, COLORS.RED)}`);
     process.exit(1);
   }
 }
